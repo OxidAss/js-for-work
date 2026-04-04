@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: mc-telegram-bot
+    runtime: python
+    rootDir: bot
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    pythonVersion: "3.12.9"
