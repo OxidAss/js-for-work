@@ -2,10 +2,12 @@ import os
 import logging
 import asyncio
 import aiohttp
+from aiohttp import web
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -14,6 +16,10 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ALLOWED_USERS = [int(uid) for uid in os.getenv("ALLOWED_USER_IDS", "").split(",") if uid.strip()]
 MC_API_URL = os.getenv("MC_API_URL")
 MC_API_KEY = os.getenv("MC_API_KEY")
+WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")  # https://your-service.onrender.com
+WEBHOOK_PATH = "/webhook"
+WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+WEB_PORT = int(os.getenv("PORT", 8000))
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -106,7 +112,17 @@ async def stop_server(message: types.Message):
         await message.answer("Сервер недоступен.")
 
 
-async def main():
+async def on_startup(app: web.Application):
+    await bot.set_webhook(WEBHOOK_URL)
+    logger.info(f"Webhook set to {WEBHOOK_URL}")
+
+
+async def on_shutdown(app: web.Application):
+    await bot.delete_webhook()
+    logger.info("Webhook deleted")
+
+
+def main():
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN not set")
     if not ALLOWED_USERS:
@@ -115,10 +131,18 @@ async def main():
         raise RuntimeError("MC_API_URL not set")
     if not MC_API_KEY:
         raise RuntimeError("MC_API_KEY not set")
+    if not WEBHOOK_HOST:
+        raise RuntimeError("WEBHOOK_HOST not set")
 
-    logger.info("Bot started")
-    await dp.start_polling(bot)
+    app = web.Application()
+    app.on_startup.append(on_startup)
+    app.on_shutdown.append(on_shutdown)
+
+    SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
+    setup_application(app, dp, bot=bot)
+
+    web.run_app(app, host="0.0.0.0", port=WEB_PORT)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
