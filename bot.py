@@ -83,7 +83,12 @@ def logs(message):
         logger.info(f"Log response: {r.status_code}, size: {len(r.content)} bytes")
         if r.status_code == 200:
             from io import BytesIO
-            bot.send_document(message.chat.id, ("latest.log", BytesIO(r.content)))
+            try:
+                bot.send_document(message.chat.id, ("latest.log", BytesIO(r.content)))
+                logger.info("Document sent successfully")
+            except Exception as send_err:
+                logger.error(f"Send error: {send_err}")
+                bot.send_message(message.chat.id, f"Ошибка отправки: {send_err}")
         elif r.status_code == 404:
             bot.send_message(message.chat.id, "Лог-файл не найден.")
         else:
