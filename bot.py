@@ -51,7 +51,9 @@ def players(message):
     if not is_allowed(message.from_user.id):
         return
 
+    logger.info(f"Requesting players from {MC_API_URL}")
     r = mc_get("/api/players")
+    logger.info(f"Response: {r.status_code if r else None}")
     if r is None:
         bot.send_message(message.chat.id, "Сервер недоступен.")
         return
