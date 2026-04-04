@@ -82,7 +82,8 @@ def logs(message):
         r = requests.get(f"{MC_API_URL}/api/logs", headers={"X-Api-Key": MC_API_KEY}, timeout=30)
         logger.info(f"Log response: {r.status_code}, size: {len(r.content)} bytes")
         if r.status_code == 200:
-            bot.send_document(message.chat.id, ("latest.log", r.content))
+            from io import BytesIO
+            bot.send_document(message.chat.id, ("latest.log", BytesIO(r.content)))
         elif r.status_code == 404:
             bot.send_message(message.chat.id, "Лог-файл не найден.")
         else:
