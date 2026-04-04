@@ -77,16 +77,19 @@ def logs(message):
     if not is_allowed(message.from_user.id):
         return
 
+    logger.info(f"Log request from {message.from_user.id}")
     try:
         r = requests.get(f"{MC_API_URL}/api/logs", headers={"X-Api-Key": MC_API_KEY}, timeout=30)
+        logger.info(f"Log response: {r.status_code}, size: {len(r.content)} bytes")
         if r.status_code == 200:
             bot.send_document(message.chat.id, ("latest.log", r.content))
         elif r.status_code == 404:
             bot.send_message(message.chat.id, "Лог-файл не найден.")
         else:
-            bot.send_message(message.chat.id, "Ошибка при получении лога.")
-    except requests.exceptions.ConnectionError:
-        bot.send_message(message.chat.id, "Сервер недоступен.")
+            bot.send_message(message.chat.id, f"Ошибка: {r.status_code}")
+    except Exception as e:
+        logger.error(f"Log error: {e}")
+        bot.send_message(message.chat.id, f"Ошибка: {e}")
 
 
 @bot.message_handler(func=lambda m: m.text == "Остановить сервер")
