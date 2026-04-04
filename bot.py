@@ -1,13 +1,10 @@
 import os
 import logging
-import asyncio
-import aiohttp
-from aiohttp import web
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-from aiogram.utils.keyboard import ReplyKeyboardBuilder
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import requests
+import telebot
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -16,50 +13,49 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ALLOWED_USERS = [int(uid) for uid in os.getenv("ALLOWED_USER_IDS", "").split(",") if uid.strip()]
 MC_API_URL = os.getenv("MC_API_URL")
 MC_API_KEY = os.getenv("MC_API_KEY")
-WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")  # https://your-service.onrender.com
-WEBHOOK_PATH = "/webhook"
-WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
-WEB_PORT = int(os.getenv("PORT", 8000))
+WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")
+WEBHOOK_PATH = f"/{BOT_TOKEN}"
+PORT = int(os.getenv("PORT", 8000))
 
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
+bot = telebot.TeleBot(BOT_TOKEN)
 
 
-def get_keyboard() -> ReplyKeyboardMarkup:
-    builder = ReplyKeyboardBuilder()
-    builder.row(
-        KeyboardButton(text="Список игроков"),
-        KeyboardButton(text="Скачать лог"),
-    )
-    builder.row(KeyboardButton(text="Остановить сервер"))
-    return builder.as_markup(resize_keyboard=True)
+def get_keyboard():
+    kb = ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.row(KeyboardButton("Список игроков"), KeyboardButton("Скачать лог"))
+    kb.row(KeyboardButton("Остановить сервер"))
+    return kb
 
 
 def is_allowed(user_id: int) -> bool:
     return user_id in ALLOWED_USERS
 
 
-@dp.message(Command("start"))
-async def start(message: types.Message):
-    if not is_allowed(message.from_user.id):
-        return
-    await message.answer("MC Server Control", reply_markup=get_keyboard())
-
-
-@dp.message(F.text == "Список игроков")
-async def players(message: types.Message):
-    if not is_allowed(message.from_user.id):
-        return
-
-    headers = {"X-Api-Key": MC_API_KEY}
+def mc_get(path: str):
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"{MC_API_URL}/api/players", headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as r:
-                data = await r.json()
-    except Exception:
-        await message.answer("Сервер недоступен.")
+        return requests.get(f"{MC_API_URL}{path}", headers={"X-Api-Key": MC_API_KEY}, timeout=10)
+    except requests.exceptions.ConnectionError:
+        return None
+
+
+@bot.message_handler(commands=["start"])
+def start(message):
+    if not is_allowed(message.from_user.id):
+        return
+    bot.send_message(message.chat.id, "MC Server Control", reply_markup=get_keyboard())
+
+
+@bot.message_handler(func=lambda m: m.text == "Список игроков")
+def players(message):
+    if not is_allowed(message.from_user.id):
         return
 
+    r = mc_get("/api/players")
+    if r is None:
+        bot.send_message(message.chat.id, "Сервер недоступен.")
+        return
+
+    data = r.json()
     players_list = data.get("players", [])
     online = data.get("online", 0)
     max_p = data.get("max", 0)
@@ -70,56 +66,56 @@ async def players(message: types.Message):
     else:
         msg = f"Онлайн: {online}/{max_p}\n\nИгроков нет."
 
-    await message.answer(msg)
+    bot.send_message(message.chat.id, msg)
 
 
-@dp.message(F.text == "Скачать лог")
-async def logs(message: types.Message):
+@bot.message_handler(func=lambda m: m.text == "Скачать лог")
+def logs(message):
     if not is_allowed(message.from_user.id):
         return
 
-    headers = {"X-Api-Key": MC_API_KEY}
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"{MC_API_URL}/api/logs", headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as r:
-                if r.status == 200:
-                    data = await r.read()
-                    await message.answer_document(
-                        types.BufferedInputFile(data, filename="latest.log")
-                    )
-                elif r.status == 404:
-                    await message.answer("Лог-файл не найден.")
-                else:
-                    await message.answer("Ошибка при получении лога.")
-    except aiohttp.ClientConnectorError:
-        await message.answer("Сервер недоступен.")
+        r = requests.get(f"{MC_API_URL}/api/logs", headers={"X-Api-Key": MC_API_KEY}, timeout=30)
+        if r.status_code == 200:
+            bot.send_document(message.chat.id, ("latest.log", r.content))
+        elif r.status_code == 404:
+            bot.send_message(message.chat.id, "Лог-файл не найден.")
+        else:
+            bot.send_message(message.chat.id, "Ошибка при получении лога.")
+    except requests.exceptions.ConnectionError:
+        bot.send_message(message.chat.id, "Сервер недоступен.")
 
 
-@dp.message(F.text == "Остановить сервер")
-async def stop_server(message: types.Message):
+@bot.message_handler(func=lambda m: m.text == "Остановить сервер")
+def stop_server(message):
     if not is_allowed(message.from_user.id):
         return
 
-    headers = {"X-Api-Key": MC_API_KEY}
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"{MC_API_URL}/api/stop", headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as r:
-                if r.status == 200:
-                    await message.answer("Сервер останавливается.")
-                else:
-                    await message.answer("Ошибка при остановке.")
-    except aiohttp.ClientConnectorError:
-        await message.answer("Сервер недоступен.")
+    r = mc_get("/api/stop")
+    if r is None:
+        bot.send_message(message.chat.id, "Сервер недоступен.")
+    elif r.status_code == 200:
+        bot.send_message(message.chat.id, "Сервер останавливается.")
+    else:
+        bot.send_message(message.chat.id, "Ошибка при остановке.")
 
 
-async def on_startup(app: web.Application):
-    await bot.set_webhook(WEBHOOK_URL)
-    logger.info(f"Webhook set to {WEBHOOK_URL}")
+class WebhookHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        if self.path != WEBHOOK_PATH:
+            self.send_response(404)
+            self.end_headers()
+            return
 
+        length = int(self.headers["Content-Length"])
+        body = self.rfile.read(length)
+        update = telebot.types.Update.de_json(body.decode("utf-8"))
+        bot.process_new_updates([update])
+        self.send_response(200)
+        self.end_headers()
 
-async def on_shutdown(app: web.Application):
-    await bot.delete_webhook()
-    logger.info("Webhook deleted")
+    def log_message(self, format, *args):
+        pass
 
 
 def main():
@@ -134,14 +130,13 @@ def main():
     if not WEBHOOK_HOST:
         raise RuntimeError("WEBHOOK_HOST not set")
 
-    app = web.Application()
-    app.on_startup.append(on_startup)
-    app.on_shutdown.append(on_shutdown)
+    bot.remove_webhook()
+    bot.set_webhook(url=f"{WEBHOOK_HOST}{WEBHOOK_PATH}")
+    logger.info(f"Webhook set to {WEBHOOK_HOST}{WEBHOOK_PATH}")
 
-    SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
-    setup_application(app, dp, bot=bot)
-
-    web.run_app(app, host="0.0.0.0", port=WEB_PORT)
+    server = HTTPServer(("0.0.0.0", PORT), WebhookHandler)
+    logger.info(f"Listening on port {PORT}")
+    server.serve_forever()
 
 
 if __name__ == "__main__":
