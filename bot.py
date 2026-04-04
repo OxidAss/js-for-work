@@ -238,7 +238,7 @@ def main():
     logger.info("Webhook set to %s%s", WEBHOOK_HOST, WEBHOOK_PATH)
     logger.info("Listening on port %d", PORT)
 
-    server = HTTPServer(("0.0.0.0", PORT), Handler=WebhookHandler)
+    server = HTTPServer(("0.0.0.0", PORT), WebhookHandler)
     server.serve_forever()
 
 
