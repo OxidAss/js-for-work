@@ -42,7 +42,7 @@ def mc_get(path: str):
 def start(message):
     if not is_allowed(message.from_user.id):
         return
-    bot.send_message(message.chat.id, "MC Server Control", reply_markup=get_keyboard())
+    bot.send_message(message.chat.id, "Панель управления сервером снизу.", reply_markup=get_keyboard())
 
 
 @bot.message_handler(func=lambda m: m.text == "Список игроков")
