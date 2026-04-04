@@ -98,6 +98,23 @@ def logs(message):
         bot.send_message(message.chat.id, f"Ошибка: {e}")
 
 
+@bot.message_handler(func=lambda m: m.text and m.text.startswith("/") and not m.text.startswith("/start"))
+def console_command(message):
+    if not is_allowed(message.from_user.id):
+        return
+
+    command = message.text[1:]  # убираем /
+    logger.info(f"Console command: {command}")
+
+    r = mc_get(f"/api/command?cmd={requests.utils.quote(command)}")
+    if r is None:
+        bot.send_message(message.chat.id, "Сервер недоступен.")
+    elif r.status_code == 200:
+        bot.send_message(message.chat.id, f"Команда выполнена: /{command}")
+    else:
+        bot.send_message(message.chat.id, f"Ошибка: {r.status_code}")
+
+
 @bot.message_handler(func=lambda m: m.text == "Остановить сервер")
 def stop_server(message):
     if not is_allowed(message.from_user.id):
