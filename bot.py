@@ -13,7 +13,6 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ALLOWED_USERS = [int(uid) for uid in os.getenv("ALLOWED_USER_IDS", "").split(",") if uid.strip()]
 MC_API_URL = os.getenv("MC_API_URL")
 MC_API_KEY = os.getenv("MC_API_KEY")
-SC_URL = os.getenv("SC_URL")
 WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")
 WEBHOOK_PATH = "/" + BOT_TOKEN
 PORT = int(os.getenv("PORT", 8000))
@@ -49,20 +48,6 @@ def mc_get(path, retries=3):
         except Exception as e:
             logger.error("Attempt %d: %s", attempt + 1, e)
     return None
-
-
-def sc_get(path):
-    if not SC_URL:
-        return None
-    try:
-        return requests.get(
-            SC_URL + path,
-            headers={"X-Api-Key": MC_API_KEY, "ngrok-skip-browser-warning": "true"},
-            timeout=10
-        )
-    except Exception as e:
-        logger.error("SC error: %s", e)
-        return None
 
 
 @bot.message_handler(commands=["start"])
@@ -121,7 +106,7 @@ def logs(message):
 def start_server(message):
     if not is_allowed(message.from_user.id):
         return
-    r = sc_get("/api/start")
+    r = mc_get("/api/start")
     if r is None:
         bot.send_message(message.chat.id, "Скрипт управления недоступен.")
     elif r.status_code == 200:
@@ -151,7 +136,7 @@ def stop_server(message):
 def restart_server(message):
     if not is_allowed(message.from_user.id):
         return
-    r = sc_get("/api/restart")
+    r = mc_get("/api/restart")
     if r is None:
         bot.send_message(message.chat.id, "Скрипт управления недоступен.")
     elif r.status_code == 200:
@@ -164,7 +149,7 @@ def restart_server(message):
 def status(message):
     if not is_allowed(message.from_user.id):
         return
-    r = sc_get("/api/status")
+    r = mc_get("/api/status")
     if r is None:
         bot.send_message(message.chat.id, "Скрипт управления недоступен.")
         return
