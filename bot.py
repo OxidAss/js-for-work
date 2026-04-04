@@ -79,9 +79,9 @@ def logs(message):
 
     logger.info(f"Log request from {message.from_user.id}")
     try:
-        r = requests.get(f"{MC_API_URL}/api/logs", headers={"X-Api-Key": MC_API_KEY}, timeout=30)
-        logger.info(f"Log response: {r.status_code}, size: {len(r.content)} bytes")
-        if r.status_code == 200:
+        r = requests.get(f"{MC_API_URL}/api/logs", headers={"X-Api-Key": MC_API_KEY, "ngrok-skip-browser-warning": "true"}, timeout=30)
+        logger.info(f"Log response: {r.status_code}, size: {len(r.content)} bytes, content-type: {r.headers.get('Content-Type')}")
+        if r.status_code == 200 and 'text/plain' in r.headers.get('Content-Type', ''):
             from io import BytesIO
             try:
                 bot.send_document(message.chat.id, ("latest.log", BytesIO(r.content)))
