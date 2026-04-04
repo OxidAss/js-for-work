@@ -42,11 +42,12 @@ def mc_get(path: str):
 def start(message):
     if not is_allowed(message.from_user.id):
         return
-    bot.send_message(message.chat.id, "Панель управления сервером снизу.", reply_markup=get_keyboard())
+    bot.send_message(message.chat.id, "MC Server Control", reply_markup=get_keyboard())
 
 
 @bot.message_handler(func=lambda m: m.text == "Список игроков")
 def players(message):
+    logger.info(f"Players request from {message.from_user.id}, allowed: {is_allowed(message.from_user.id)}, allowed list: {ALLOWED_USERS}")
     if not is_allowed(message.from_user.id):
         return
 
@@ -101,6 +102,16 @@ def stop_server(message):
 
 
 class WebhookHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/health":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok"}')
+        else:
+            self.send_response(404)
+            self.end_headers()
+
     def do_POST(self):
         if self.path != WEBHOOK_PATH:
             self.send_response(404)
