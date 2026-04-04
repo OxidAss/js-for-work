@@ -19,12 +19,43 @@ PORT = int(os.getenv("PORT", 8000))
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
+# Состояние пользователей: страница и ожидание ввода
+user_pages = {}
+user_state = {}  # {user_id: "whitelist_add" | "whitelist_remove" | None}
 
-def get_keyboard():
+# Страницы кнопок (по 4 функции + навигация)
+PAGES = [
+    ["Список игроков", "Скачать лог", "Запустить сервер", "Остановить сервер", "Перезапустить сервер"],
+    ["Статус", "Whitelist: добавить", "Whitelist: удалить"],
+]
+
+
+def get_keyboard(page=0):
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.row(KeyboardButton("Список игроков"), KeyboardButton("Скачать лог"))
-    kb.row(KeyboardButton("Запустить сервер"), KeyboardButton("Остановить сервер"))
-    kb.row(KeyboardButton("Перезапустить сервер"), KeyboardButton("Статус"))
+    buttons = PAGES[page]
+
+    if page == 0:
+        # Первая страница: по 2 в ряд, последняя кнопка -> отдельно
+        for i in range(0, len(buttons) - 1, 2):
+            row = [KeyboardButton(buttons[i])]
+            if i + 1 < len(buttons) - 1:
+                row.append(KeyboardButton(buttons[i + 1]))
+            kb.row(*row)
+        kb.row(KeyboardButton(buttons[-1]), KeyboardButton("→"))
+    else:
+        # Остальные страницы: по 2 в ряд
+        for i in range(0, len(buttons), 2):
+            row = [KeyboardButton(buttons[i])]
+            if i + 1 < len(buttons):
+                row.append(KeyboardButton(buttons[i + 1]))
+            kb.row(*row)
+        # Навигация
+        nav = []
+        nav.append(KeyboardButton("←"))
+        if page < len(PAGES) - 1:
+            nav.append(KeyboardButton("→"))
+        kb.row(*nav)
+
     return kb
 
 
@@ -54,14 +85,27 @@ def mc_get(path, retries=3):
 def start(message):
     if not is_allowed(message.from_user.id):
         return
-    bot.send_message(message.chat.id, "MC Server Control", reply_markup=get_keyboard())
+    user_pages[message.from_user.id] = 0
+    bot.send_message(message.chat.id, "MC Server Control", reply_markup=get_keyboard(0))
+
+
+@bot.message_handler(func=lambda m: m.text in ["→", "←"])
+def navigate(message):
+    if not is_allowed(message.from_user.id):
+        return
+    page = user_pages.get(message.from_user.id, 0)
+    if message.text == "→" and page < len(PAGES) - 1:
+        page += 1
+    elif message.text == "←" and page > 0:
+        page -= 1
+    user_pages[message.from_user.id] = page
+    bot.send_message(message.chat.id, "Страница " + str(page + 1), reply_markup=get_keyboard(page))
 
 
 @bot.message_handler(func=lambda m: m.text == "Список игроков")
 def players(message):
     if not is_allowed(message.from_user.id):
         return
-    logger.info("Players request from %d", message.from_user.id)
     r = mc_get("/api/players")
     if r is None:
         bot.send_message(message.chat.id, "Сервер недоступен.")
@@ -88,7 +132,6 @@ def logs(message):
             headers={"X-Api-Key": MC_API_KEY, "ngrok-skip-browser-warning": "true"},
             timeout=30
         )
-        logger.info("Log response: %d, size: %d", r.status_code, len(r.content))
         if r.status_code == 200:
             try:
                 bot.send_document(message.chat.id, ("latest.log", BytesIO(r.content)))
@@ -164,12 +207,27 @@ def status(message):
     bot.send_message(message.chat.id, "\n".join(lines))
 
 
+@bot.message_handler(func=lambda m: m.text == "Whitelist: добавить")
+def whitelist_add_prompt(message):
+    if not is_allowed(message.from_user.id):
+        return
+    user_state[message.from_user.id] = "whitelist_add"
+    bot.send_message(message.chat.id, "Введите ник игрока:")
+
+
+@bot.message_handler(func=lambda m: m.text == "Whitelist: удалить")
+def whitelist_remove_prompt(message):
+    if not is_allowed(message.from_user.id):
+        return
+    user_state[message.from_user.id] = "whitelist_remove"
+    bot.send_message(message.chat.id, "Введите ник игрока:")
+
+
 @bot.message_handler(func=lambda m: m.text and m.text.startswith("/") and not m.text.startswith("/start"))
 def console_command(message):
     if not is_allowed(message.from_user.id):
         return
     command = message.text[1:]
-    logger.info("Console command: %s", command)
     r = mc_get("/api/command?cmd=" + requests.utils.quote(command))
     if r is None:
         bot.send_message(message.chat.id, "Сервер недоступен.")
@@ -177,6 +235,32 @@ def console_command(message):
         bot.send_message(message.chat.id, "Команда выполнена: /" + command)
     else:
         bot.send_message(message.chat.id, "Ошибка: " + str(r.status_code))
+
+
+@bot.message_handler(func=lambda m: True)
+def handle_text(message):
+    if not is_allowed(message.from_user.id):
+        return
+
+    state = user_state.get(message.from_user.id)
+
+    if state == "whitelist_add":
+        user_state[message.from_user.id] = None
+        nick = message.text.strip()
+        r = mc_get("/api/command?cmd=" + requests.utils.quote("whitelist add " + nick))
+        if r is None:
+            bot.send_message(message.chat.id, "Сервер недоступен.")
+        else:
+            bot.send_message(message.chat.id, nick + " добавлен в whitelist.")
+
+    elif state == "whitelist_remove":
+        user_state[message.from_user.id] = None
+        nick = message.text.strip()
+        r = mc_get("/api/command?cmd=" + requests.utils.quote("whitelist remove " + nick))
+        if r is None:
+            bot.send_message(message.chat.id, "Сервер недоступен.")
+        else:
+            bot.send_message(message.chat.id, nick + " удалён из whitelist.")
 
 
 class WebhookHandler(BaseHTTPRequestHandler):
