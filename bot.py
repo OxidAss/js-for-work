@@ -13,6 +13,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ALLOWED_USERS = [int(uid) for uid in os.getenv("ALLOWED_USER_IDS", "").split(",") if uid.strip()]
 MC_API_URL = os.getenv("MC_API_URL")
 MC_API_KEY = os.getenv("MC_API_KEY")
+SC_URL = os.getenv("SC_URL")  # URL ngrok туннеля на порт 25581
 WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")
 WEBHOOK_PATH = f"/{BOT_TOKEN}"
 PORT = int(os.getenv("PORT", 8000))
@@ -23,7 +24,8 @@ bot = telebot.TeleBot(BOT_TOKEN)
 def get_keyboard():
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     kb.row(KeyboardButton("Список игроков"), KeyboardButton("Скачать лог"))
-    kb.row(KeyboardButton("Остановить сервер"))
+    kb.row(KeyboardButton("Запустить сервер"), KeyboardButton("Остановить сервер"))
+    kb.row(KeyboardButton("Перезапустить сервер"), KeyboardButton("Статус"))
     return kb
 
 
@@ -113,6 +115,57 @@ def console_command(message):
         bot.send_message(message.chat.id, f"Команда выполнена: /{command}")
     else:
         bot.send_message(message.chat.id, f"Ошибка: {r.status_code}")
+
+
+@bot.message_handler(func=lambda m: m.text == "Запустить сервер")
+def start_server(message):
+    if not is_allowed(message.from_user.id):
+        return
+    r = sc_get("/api/start")
+    if r is None:
+        bot.send_message(message.chat.id, "Скрипт управления недоступен.")
+    elif r.status_code == 200:
+        status = r.json().get("status")
+        if status == "already_running":
+            bot.send_message(message.chat.id, "Сервер уже запущен.")
+        else:
+            bot.send_message(message.chat.id, "Сервер запускается.")
+    else:
+        bot.send_message(message.chat.id, "Ошибка при запуске.")
+
+
+@bot.message_handler(func=lambda m: m.text == "Перезапустить сервер")
+def restart_server(message):
+    if not is_allowed(message.from_user.id):
+        return
+    r = sc_get("/api/restart")
+    if r is None:
+        bot.send_message(message.chat.id, "Скрипт управления недоступен.")
+    elif r.status_code == 200:
+        bot.send_message(message.chat.id, "Сервер перезапускается.")
+    else:
+        bot.send_message(message.chat.id, "Ошибка при перезапуске.")
+
+
+@bot.message_handler(func=lambda m: m.text == "Статус")
+def status(message):
+    if not is_allowed(message.from_user.id):
+        return
+    r = sc_get("/api/status")
+    if r is None:
+        bot.send_message(message.chat.id, "Скрипт управления недоступен.")
+        return
+    data = r.json()
+    running = "запущен" if data.get("running") else "остановлен"
+    stats = data.get("stats", {})
+    msg = (
+        f"Сервер: {running}
+"
+        f"CPU: {stats.get('cpu')}%
+"
+        f"RAM: {stats.get('ram_used')} / {stats.get('ram_total')} MB ({stats.get('ram_percent')}%)"
+    )
+    bot.send_message(message.chat.id, msg)
 
 
 @bot.message_handler(func=lambda m: m.text == "Остановить сервер")
