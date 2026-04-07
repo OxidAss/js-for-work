@@ -366,7 +366,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
 def main():
     bot.remove_webhook()
     webhook_url = WEBHOOK_HOST + WEBHOOK_PATH
-    bot.set_webhook(url=webhook_url, allowed_updates=bot.listening_types)
+    bot.set_webhook(url=webhook_url, allowed_updates=["message", "callback_query"])
     logger.info("Webhook установлен: %s", webhook_url)
     logger.info("Слушаю порт %d", PORT)
     server = HTTPServer(("0.0.0.0", PORT), WebhookHandler)
