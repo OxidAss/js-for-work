@@ -247,24 +247,29 @@ def handle_text(message):
     if state == "whitelist_add":
         user_state[message.from_user.id] = None
         nick = message.text.strip()
-        
         import hashlib, uuid as _uuid
         h = hashlib.md5(b"OfflinePlayer:" + nick.encode()).digest()
         uid = str(_uuid.UUID(bytes=h[:16], version=3))
-        
         r = mc_get("/api/whitelist/add?name=" + requests.utils.quote(nick) + "&uuid=" + uid)
         if r is None:
-            bot.send_message(message.chat.id, "⛔ Сервер управления недоступен.")
+            bot.send_message(message.chat.id, "Сервер недоступен.")
         else:
             data = r.json()
-            bot.send_message(message.chat.id, data.get("message", f"✅ {nick} добавлен в whitelist."))
-            
-            # 🔄 Автоматическая перезагрузка вайтлиста на сервере
-            reload_r = mc_get("/api/command?cmd=" + requests.utils.quote("whitelist reload"))
-            if reload_r and reload_r.status_code == 200:
-                bot.send_message(message.chat.id, "🔄 Вайтлист успешно перезагружен.")
-            else:
-                bot.send_message(message.chat.id, "⚠️ Игрок добавлен, но перезагрузка не прошла. Выполните `/whitelist reload` вручную.")
+            bot.send_message(message.chat.id, data.get("message", nick + " добавлен в whitelist."))
+            # 🔄 Перезагрузка вайтлиста сразу после добавления
+            mc_get("/api/command?cmd=" + requests.utils.quote("whitelist reload"))
+
+    elif state == "whitelist_remove":
+        user_state[message.from_user.id] = None
+        nick = message.text.strip()
+        r = mc_get("/api/whitelist/remove?name=" + requests.utils.quote(nick))
+        if r is None:
+            bot.send_message(message.chat.id, "Сервер недоступен.")
+        else:
+            data = r.json()
+            bot.send_message(message.chat.id, data.get("message", nick + " удалён из whitelist."))
+            # 🔄 Перезагрузка вайтлиста сразу после удаления
+            mc_get("/api/command?cmd=" + requests.utils.quote("whitelist reload"))
 
     elif state == "whitelist_remove":
         user_state[message.from_user.id] = None
