@@ -244,50 +244,30 @@ def handle_text(message):
 
     state = user_state.get(message.from_user.id)
 
-    if state == "whitelist_add":
-        user_state[message.from_user.id] = None
-        nick = message.text.strip()
-        import hashlib, uuid as _uuid
-        h = hashlib.md5(b"OfflinePlayer:" + nick.encode()).digest()
-        uid = str(_uuid.UUID(bytes=h[:16], version=3))
-        r = mc_get("/api/whitelist/add?name=" + requests.utils.quote(nick) + "&uuid=" + uid)
-        if r is None:
-            bot.send_message(message.chat.id, "Сервер недоступен.")
-        else:
-            data = r.json()
-            bot.send_message(message.chat.id, data.get("message", nick + " добавлен в whitelist."))
-            # 🔄 Перезагрузка вайтлиста сразу после добавления
-            mc_get("/api/command?cmd=" + requests.utils.quote("whitelist reload"))
-
-    elif state == "whitelist_remove":
-        user_state[message.from_user.id] = None
-        nick = message.text.strip()
-        r = mc_get("/api/whitelist/remove?name=" + requests.utils.quote(nick))
-        if r is None:
-            bot.send_message(message.chat.id, "Сервер недоступен.")
-        else:
-            data = r.json()
-            bot.send_message(message.chat.id, data.get("message", nick + " удалён из whitelist."))
-            # 🔄 Перезагрузка вайтлиста сразу после удаления
-            mc_get("/api/command?cmd=" + requests.utils.quote("whitelist reload"))
-
-    elif state == "whitelist_remove":
+    if state in ["whitelist_add", "whitelist_remove"]:
         user_state[message.from_user.id] = None
         nick = message.text.strip()
         
-        r = mc_get("/api/whitelist/remove?name=" + requests.utils.quote(nick))
+        # Выбираем эндпоинт в зависимости от действия
+        action = "add" if state == "whitelist_add" else "remove"
+        
+        # Отправляем запрос. Только НИК, UUID сервер сделает сам.
+        r = mc_get(f"/api/whitelist/{action}?name=" + requests.utils.quote(nick))
+        
         if r is None:
-            bot.send_message(message.chat.id, "⛔ Сервер управления недоступен.")
+            bot.send_message(message.chat.id, "⛔ Ошибка: Сервер управления недоступен.")
         else:
-            data = r.json()
-            bot.send_message(message.chat.id, data.get("message", f"✅ {nick} удалён из whitelist."))
-            
-            # 🔄 Автоматическая перезагрузка вайтлиста на сервере
-            reload_r = mc_get("/api/command?cmd=" + requests.utils.quote("whitelist reload"))
-            if reload_r and reload_r.status_code == 200:
-                bot.send_message(message.chat.id, "🔄 Вайтлист успешно перезагружен.")
+            res_data = r.json()
+            if res_data.get("status") == "success":
+                # ОБЯЗАТЕЛЬНО: после прямой правки файла НУЖЕН релоад в консоли
+                bot.send_message(message.chat.id, f"✅ {res_data.get('message')}")
+                
+                # Просим сервер перечитать файл
+                reload_r = mc_get("/api/command?cmd=" + requests.utils.quote("whitelist reload"))
+                if reload_r:
+                    bot.send_message(message.chat.id, "🔄 Вайтлист на сервере обновлен.")
             else:
-                bot.send_message(message.chat.id, "⚠️ Игрок удалён, но перезагрузка не прошла. Выполните `/whitelist reload` вручную.")
+                bot.send_message(message.chat.id, f"⚠️ Ошибка: {res_data.get('message')}")
 
 
 class WebhookHandler(BaseHTTPRequestHandler):
