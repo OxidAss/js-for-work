@@ -1,10 +1,10 @@
 import os
 import logging
 import requests
+import telebot
 from io import BytesIO
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import telebot
-from telebot.types import ReplyKeyboardMarkup, KeyboardButton
+from urllib.parse import quote
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -18,305 +18,100 @@ WEBHOOK_PATH = "/" + BOT_TOKEN
 PORT = int(os.getenv("PORT", 8000))
 
 bot = telebot.TeleBot(BOT_TOKEN)
-
-# Состояние пользователей: страница и ожидание ввода
 user_pages = {}
-user_state = {}  # {user_id: "whitelist_add" | "whitelist_remove" | None}
+user_state = {}
 
-# Страницы кнопок (по 4 функции + навигация)
 PAGES = [
     ["Список игроков", "Скачать лог", "Запустить сервер", "Остановить сервер", "Перезапустить сервер"],
     ["Статус", "Whitelist: добавить", "Whitelist: удалить"],
 ]
 
-
 def get_keyboard(page=0):
-    kb = ReplyKeyboardMarkup(resize_keyboard=True)
-    buttons = PAGES[page]
-
-    if page == 0:
-        # Первая страница: по 2 в ряд, последняя кнопка -> отдельно
-        for i in range(0, len(buttons) - 1, 2):
-            row = [KeyboardButton(buttons[i])]
-            if i + 1 < len(buttons) - 1:
-                row.append(KeyboardButton(buttons[i + 1]))
-            kb.row(*row)
-        kb.row(KeyboardButton(buttons[-1]), KeyboardButton("→"))
-    else:
-        # Остальные страницы: по 2 в ряд
-        for i in range(0, len(buttons), 2):
-            row = [KeyboardButton(buttons[i])]
-            if i + 1 < len(buttons):
-                row.append(KeyboardButton(buttons[i + 1]))
-            kb.row(*row)
-        # Навигация
-        nav = []
-        nav.append(KeyboardButton("←"))
-        if page < len(PAGES) - 1:
-            nav.append(KeyboardButton("→"))
-        kb.row(*nav)
-
+    kb = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+    btns = PAGES[page]
+    for i in range(0, len(btns), 2):
+        row = [telebot.types.KeyboardButton(btns[i])]
+        if i + 1 < len(btns): row.append(telebot.types.KeyboardButton(btns[i+1]))
+        kb.row(*row)
+    nav = []
+    if page > 0: nav.append(telebot.types.KeyboardButton("←"))
+    if page < len(PAGES) - 1: nav.append(telebot.types.KeyboardButton("→"))
+    if nav: kb.row(*nav)
     return kb
 
+def is_allowed(uid): return uid in ALLOWED_USERS
 
-def is_allowed(user_id):
-    return user_id in ALLOWED_USERS
-
-
-def mc_get(path, retries=3):
-    for attempt in range(retries):
-        try:
-            r = requests.get(
-                MC_API_URL + path,
-                headers={"X-Api-Key": MC_API_KEY, "ngrok-skip-browser-warning": "true"},
-                timeout=10
-            )
-            if r.status_code == 200:
-                return r
-            logger.warning("Attempt %d: status %d", attempt + 1, r.status_code)
-        except requests.exceptions.ConnectionError:
-            logger.warning("Attempt %d: connection error", attempt + 1)
-        except Exception as e:
-            logger.error("Attempt %d: %s", attempt + 1, e)
-    return None
-
+def mc_get(path):
+    try:
+        r = requests.get(MC_API_URL + path, headers={"X-Api-Key": MC_API_KEY}, timeout=15)
+        return r
+    except: return None
 
 @bot.message_handler(commands=["start"])
-def start(message):
-    if not is_allowed(message.from_user.id):
-        return
-    user_pages[message.from_user.id] = 0
-    bot.send_message(message.chat.id, "MC Server Control", reply_markup=get_keyboard(0))
-
+def start(m):
+    if is_allowed(m.from_user.id):
+        user_pages[m.from_user.id] = 0
+        bot.send_message(m.chat.id, "Контроль MC Сервера", reply_markup=get_keyboard(0))
 
 @bot.message_handler(func=lambda m: m.text in ["→", "←"])
-def navigate(message):
-    if not is_allowed(message.from_user.id):
-        return
-    page = user_pages.get(message.from_user.id, 0)
-    if message.text == "→" and page < len(PAGES) - 1:
-        page += 1
-    elif message.text == "←" and page > 0:
-        page -= 1
-    user_pages[message.from_user.id] = page
-    bot.send_message(message.chat.id, "Страница " + str(page + 1), reply_markup=get_keyboard(page))
-
-
-@bot.message_handler(func=lambda m: m.text == "Список игроков")
-def players(message):
-    if not is_allowed(message.from_user.id):
-        return
-    r = mc_get("/api/players")
-    if r is None:
-        bot.send_message(message.chat.id, "Сервер недоступен.")
-        return
-    data = r.json()
-    players_list = data.get("players", [])
-    online = data.get("online", 0)
-    max_p = data.get("max", 0)
-    if players_list:
-        names = "\n".join("- " + p for p in players_list)
-        msg = "Онлайн: %d/%d\n\n%s" % (online, max_p, names)
-    else:
-        msg = "Онлайн: %d/%d\n\nИгроков нет." % (online, max_p)
-    bot.send_message(message.chat.id, msg)
-
-
-@bot.message_handler(func=lambda m: m.text == "Скачать лог")
-def logs(message):
-    if not is_allowed(message.from_user.id):
-        return
-    try:
-        r = requests.get(
-            MC_API_URL + "/api/logs",
-            headers={"X-Api-Key": MC_API_KEY, "ngrok-skip-browser-warning": "true"},
-            timeout=30
-        )
-        if r.status_code == 200:
-            try:
-                bot.send_document(message.chat.id, ("latest.log", BytesIO(r.content)))
-            except Exception as e:
-                bot.send_message(message.chat.id, "Ошибка отправки: " + str(e))
-        elif r.status_code == 404:
-            bot.send_message(message.chat.id, "Лог-файл не найден.")
-        else:
-            bot.send_message(message.chat.id, "Ошибка: " + str(r.status_code))
-    except requests.exceptions.ConnectionError:
-        bot.send_message(message.chat.id, "Сервер недоступен.")
-
-
-@bot.message_handler(func=lambda m: m.text == "Запустить сервер")
-def start_server(message):
-    if not is_allowed(message.from_user.id):
-        return
-    r = mc_get("/api/start")
-    if r is None:
-        bot.send_message(message.chat.id, "Скрипт управления недоступен.")
-    elif r.status_code == 200:
-        status = r.json().get("status")
-        if status == "already_running":
-            bot.send_message(message.chat.id, "Сервер уже запущен.")
-        else:
-            bot.send_message(message.chat.id, "Сервер запускается.")
-    else:
-        bot.send_message(message.chat.id, "Ошибка при запуске.")
-
-
-@bot.message_handler(func=lambda m: m.text == "Остановить сервер")
-def stop_server(message):
-    if not is_allowed(message.from_user.id):
-        return
-    r = mc_get("/api/stop")
-    if r is None:
-        bot.send_message(message.chat.id, "Сервер недоступен.")
-    elif r.status_code == 200:
-        bot.send_message(message.chat.id, "Сервер останавливается.")
-    else:
-        bot.send_message(message.chat.id, "Ошибка при остановке.")
-
-
-@bot.message_handler(func=lambda m: m.text == "Перезапустить сервер")
-def restart_server(message):
-    if not is_allowed(message.from_user.id):
-        return
-    r = mc_get("/api/restart")
-    if r is None:
-        bot.send_message(message.chat.id, "Скрипт управления недоступен.")
-    elif r.status_code == 200:
-        bot.send_message(message.chat.id, "Сервер перезапускается.")
-    else:
-        bot.send_message(message.chat.id, "Ошибка при перезапуске.")
-
-
-@bot.message_handler(func=lambda m: m.text == "Статус")
-def status(message):
-    if not is_allowed(message.from_user.id):
-        return
-    r = mc_get("/api/status")
-    if r is None:
-        bot.send_message(message.chat.id, "Скрипт управления недоступен.")
-        return
-    data = r.json()
-    running = "запущен" if data.get("running") else "остановлен"
-    stats = data.get("stats", {})
-    lines = [
-        "Сервер: " + running,
-        "CPU: " + str(stats.get("cpu")) + "%",
-        "RAM: " + str(stats.get("ram_used")) + " / " + str(stats.get("ram_total")) + " MB (" + str(stats.get("ram_percent")) + "%)"
-    ]
-    bot.send_message(message.chat.id, "\n".join(lines))
-
+def nav(m):
+    if not is_allowed(m.from_user.id): return
+    p = user_pages.get(m.from_user.id, 0)
+    p = p + 1 if m.text == "→" else p - 1
+    user_pages[m.from_user.id] = p
+    bot.send_message(m.chat.id, f"Страница {p+1}", reply_markup=get_keyboard(p))
 
 @bot.message_handler(func=lambda m: m.text == "Whitelist: добавить")
-def whitelist_add_prompt(message):
-    if not is_allowed(message.from_user.id):
-        return
-    user_state[message.from_user.id] = "whitelist_add"
-    bot.send_message(message.chat.id, "Введите ник игрока:")
-
+def wl_add(m):
+    if is_allowed(m.from_user.id):
+        user_state[m.from_user.id] = "add"
+        bot.send_message(m.chat.id, "Введите ник для добавления:")
 
 @bot.message_handler(func=lambda m: m.text == "Whitelist: удалить")
-def whitelist_remove_prompt(message):
-    if not is_allowed(message.from_user.id):
-        return
-    user_state[message.from_user.id] = "whitelist_remove"
-    bot.send_message(message.chat.id, "Введите ник игрока:")
-
-
-@bot.message_handler(func=lambda m: m.text and m.text.startswith("/") and not m.text.startswith("/start"))
-def console_command(message):
-    if not is_allowed(message.from_user.id):
-        return
-    command = message.text[1:]
-    r = mc_get("/api/command?cmd=" + requests.utils.quote(command))
-    if r is None:
-        bot.send_message(message.chat.id, "Сервер недоступен.")
-    elif r.status_code == 200:
-        bot.send_message(message.chat.id, "Команда выполнена: /" + command)
-    else:
-        bot.send_message(message.chat.id, "Ошибка: " + str(r.status_code))
-
+def wl_rem(m):
+    if is_allowed(m.from_user.id):
+        user_state[m.from_user.id] = "remove"
+        bot.send_message(m.chat.id, "Введите ник для удаления:")
 
 @bot.message_handler(func=lambda m: True)
-def handle_text(message):
-    if not is_allowed(message.from_user.id):
-        return
-
-    state = user_state.get(message.from_user.id)
-
-    if state in ["whitelist_add", "whitelist_remove"]:
-        user_state[message.from_user.id] = None
-        nick = message.text.strip()
+def handle_text(m):
+    if not is_allowed(m.from_user.id): return
+    state = user_state.get(m.from_user.id)
+    
+    if state in ["add", "remove"]:
+        user_state[m.from_user.id] = None
+        nick = m.text.strip()
+        action = "add" if state == "add" else "remove"
         
-        # Выбираем эндпоинт в зависимости от действия
-        action = "add" if state == "whitelist_add" else "remove"
+        bot.send_message(m.chat.id, f"⏳ Запрос для `{nick}`...")
+        r = mc_get(f"/api/whitelist/{action}?name={quote(nick)}")
         
-        # Отправляем запрос. Только НИК, UUID сервер сделает сам.
-        r = mc_get(f"/api/whitelist/{action}?name=" + requests.utils.quote(nick))
-        
-        if r is None:
-            bot.send_message(message.chat.id, "⛔ Ошибка: Сервер управления недоступен.")
+        if r and r.status_code == 200:
+            data = r.json()
+            bot.send_message(m.chat.id, data.get("message", "✅ Готово"))
+            # Команда релоада
+            mc_get("/api/command?cmd=" + quote("whitelist reload"))
         else:
-            res_data = r.json()
-            if res_data.get("status") == "success":
-                # ОБЯЗАТЕЛЬНО: после прямой правки файла НУЖЕН релоад в консоли
-                bot.send_message(message.chat.id, f"✅ {res_data.get('message')}")
-                
-                # Просим сервер перечитать файл
-                reload_r = mc_get("/api/command?cmd=" + requests.utils.quote("whitelist reload"))
-                if reload_r:
-                    bot.send_message(message.chat.id, "🔄 Вайтлист на сервере обновлен.")
-            else:
-                bot.send_message(message.chat.id, f"⚠️ Ошибка: {res_data.get('message')}")
+            bot.send_message(m.chat.id, "❌ Ошибка сервера.")
+    
+    elif m.text == "Статус":
+        r = mc_get("/api/status")
+        if r:
+            d = r.json()
+            s = d['stats']
+            bot.send_message(m.chat.id, f"Сервер: {'✅' if d['running'] else '❌'}\nCPU: {s['cpu']}%\nRAM: {s['ram_used']}/{s['ram_total']} MB")
 
-
+# WEBHOOK HANDLER
 class WebhookHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == "/health":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"status":"ok"}')
-        else:
-            self.send_response(404)
-            self.end_headers()
-
     def do_POST(self):
-        if self.path != WEBHOOK_PATH:
-            self.send_response(404)
-            self.end_headers()
-            return
-        length = int(self.headers["Content-Length"])
-        body = self.rfile.read(length)
-        update = telebot.types.Update.de_json(body.decode("utf-8"))
-        bot.process_new_updates([update])
-        self.send_response(200)
-        self.end_headers()
-
-    def log_message(self, format, *args):
-        pass
-
-
-def main():
-    if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN not set")
-    if not ALLOWED_USERS:
-        raise RuntimeError("ALLOWED_USER_IDS not set")
-    if not MC_API_URL:
-        raise RuntimeError("MC_API_URL not set")
-    if not MC_API_KEY:
-        raise RuntimeError("MC_API_KEY not set")
-    if not WEBHOOK_HOST:
-        raise RuntimeError("WEBHOOK_HOST not set")
-
-    bot.remove_webhook()
-    bot.set_webhook(url=WEBHOOK_HOST + WEBHOOK_PATH)
-    logger.info("Webhook set to %s%s", WEBHOOK_HOST, WEBHOOK_PATH)
-    logger.info("Listening on port %d", PORT)
-
-    server = HTTPServer(("0.0.0.0", PORT), WebhookHandler)
-    server.serve_forever()
-
+        if self.path == WEBHOOK_PATH:
+            length = int(self.headers["Content-Length"])
+            body = self.rfile.read(length).decode("utf-8")
+            bot.process_new_updates([telebot.types.Update.de_json(body)])
+            self.send_response(200); self.end_headers()
+    def do_GET(self): self.send_response(200); self.end_headers()
 
 if __name__ == "__main__":
-    main()
+    bot.remove_webhook()
+    bot.set_webhook(url=WEBHOOK_HOST + WEBHOOK_PATH)
+    HTTPServer(("0.0.0.0", PORT), WebhookHandler).serve_forever()
